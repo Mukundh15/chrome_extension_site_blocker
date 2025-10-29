@@ -19,6 +19,10 @@ const CONFIG = {
       identityToolkit: "https://identitytoolkit.googleapis.com/v1/accounts:signUp", // anonymous sign-in
       firestoreBase: "https://firestore.googleapis.com/v1"
     }
+  },  // GA4 Measurement Protocol configuration (add your real values)
+  GA4: {
+    measurement_id: "G-XXXXXXXXXX",   // replace with your Measurement ID
+    api_secret: "ABCDEFGHIJKLMNOPQRSTUVWXYZ" // replace with your API secret
   }
 };
 

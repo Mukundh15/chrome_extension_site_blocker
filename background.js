@@ -18,6 +18,48 @@ async function getOrCreateDeviceId() {
   return newId;
 }
 
+/**
+ * Send event to GA4 via Measurement Protocol
+ * - Requires CONFIG.GA4.measurement_id and CONFIG.GA4.api_secret
+ * - Uses deviceId as client_id to identify the device in GA
+ */
+async function sendToGA(eventName, eventParams = {}) {
+  try {
+    if (!self.CONFIG || !self.CONFIG.GA4) return false;
+    const { measurement_id, api_secret } = self.CONFIG.GA4;
+    if (!measurement_id || !api_secret) return false;
+
+    // client_id: use deviceId (persistent) or generate fallback
+    const deviceId = await getOrCreateDeviceId(); // you already have this helper
+    const client_id = deviceId || `${Math.floor(Math.random() * 1e10)}`;
+
+    const url = `https://www.google-analytics.com/mp/collect?measurement_id=${encodeURIComponent(measurement_id)}&api_secret=${encodeURIComponent(api_secret)}`;
+
+    const body = {
+      client_id,
+      events: [{
+        name: eventName,
+        params: eventParams
+      }]
+    };
+
+    // fetch with keepalive so the service worker can send it even when unloading
+    await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      keepalive: true
+    });
+
+    return true;
+  } catch (err) {
+    console.warn('[LabPolicy] sendToGA failed', err);
+    return false;
+  }
+}
+
+
+
 // ==== Firebase direct REST helpers (anonymous auth + write to Firestore) ====
 // We obtain an access_token suitable for Firestore by first doing anonymous
 // sign-in to get a refresh_token, then exchanging it via STS to an access token.
@@ -194,21 +236,42 @@ function isAllowed(url, whitelist) {
 async function logVisit(url, title, tabId, allowed) {
   const timestamp = new Date().toISOString();
 
-  // send to Firestore if configured
   try {
     const deviceId = await getOrCreateDeviceId();
+
+    // Read data safely
     const { pcCode = '' } = await chrome.storage.local.get('pcCode');
-    const { studentInfo = null } = await chrome.storage.local.get('studentInfo');
+    const { studentInfo = {} } = await chrome.storage.local.get('studentInfo');
+
+    // Write to Firestore (existing behavior)
     await writeLogToFirestore({
-      url, title, allowed,
-      classCode: studentInfo?.classCode || '',
-      rollNumber: studentInfo?.rollNumber || '',
+      url,
+      title,
+      allowed,
+      classCode: studentInfo.classCode || '',
+      rollNumber: studentInfo.rollNumber || '',
       pcCode,
       deviceId,
       ts: Date.parse(timestamp)
     });
-  } catch (e) {}
+
+    // Send to Google Analytics
+    await sendToGA('site_visit', {
+      page_location: String(url || ''),
+      page_title: String(title || ''),
+      allowed: Boolean(allowed),
+      pc_code: String(pcCode || ''),
+      class_code: String(studentInfo.classCode || ''),
+      roll_number: String(studentInfo.rollNumber || ''),
+      device_id: String(deviceId || ''),
+      timestamp
+    });
+
+  } catch (e) {
+    console.warn('[logVisit] failed', e);
+  }
 }
+
 
 // Handle navigation
 chrome.webNavigation.onBeforeNavigate.addListener(async (details) => {
